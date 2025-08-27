@@ -6,10 +6,13 @@ from utils import load_data, load_model, save_model, fix_random_seed_as
 import scipy.sparse as sp
 from scipy.sparse import csr_matrix, coo_matrix, dok_matrix
 from param import args
-import  pickle
-import torch, dgl
+import pickle
+# import torch, dgl
+import torch
+
 
 class DataHandler:
+    """数据处理器接口"""
     def __init__(self):
         predir = ''
         if args.dataset == 'yelp':
@@ -22,10 +25,8 @@ class DataHandler:
             predir = './datasets/epinions/'
             self.datapath = predir + 'dataset.pkl'
         self.predir = predir
-        
 
-
-    def loadOneFile(self,data_path):
+    def loadOneFile(self, data_path):
         with open(data_path, 'rb') as f:
             data = pickle.load(f)
         return data
@@ -37,7 +38,7 @@ class DataHandler:
         valMat = self.dataset['val']
         trainset = TrnData(trnMat)
         testset = TstData(tstMat, trnMat)
-        valset = TstData(valMat,trnMat)
+        valset = TstData(valMat, trnMat)
         self.n_user, self.n_item = self.dataset['userCount'], self.dataset['itemCount']
         args.user, args.item = self.n_user, self.n_item
 
@@ -60,24 +61,37 @@ class DataHandler:
             num_workers=args.num_workers
         )
 
-        
-        self.uu_graph = dgl.from_scipy(self.dataset['trust'])
+        # self.uu_graph = dgl.from_scipy(self.dataset['trust'])
+        # uimat = self.dataset['train'].tocsr()
+        # self.ui_graph = self.makeBiAdj(uimat, self.n_user, self.n_item)
+        self.uu_graph = self._scipy_to_torch_sparse(self.dataset['trust'])
         uimat = self.dataset['train'].tocsr()
-        self.ui_graph = self.makeBiAdj(uimat,self.n_user,self.n_item)
+        self.ui_graph = self.makeBiAdj(uimat, self.n_user, self.n_item)
 
-    def makeBiAdj(self, mat,n_user,n_item):
+    def makeBiAdj(self, mat, n_user, n_item):
+        # a = sp.csr_matrix((n_user, n_user))
+        # b = sp.csr_matrix((n_item, n_item))
+        # mat = sp.vstack([sp.hstack([a, mat]), sp.hstack([mat.transpose(), b])])
+        # mat = (mat != 0) * 1.0
+        # mat = mat.tocoo()
+        # edge_src, edge_dst = mat.nonzero()
+        # ui_graph = dgl.graph(data=(edge_src, edge_dst), idtype=torch.int32, num_nodes=mat.shape[0])
         a = sp.csr_matrix((n_user, n_user))
         b = sp.csr_matrix((n_item, n_item))
         mat = sp.vstack([sp.hstack([a, mat]), sp.hstack([mat.transpose(), b])])
         mat = (mat != 0) * 1.0
-        mat = mat.tocoo()
-        edge_src,edge_dst = mat.nonzero()
-        ui_graph = dgl.graph(data=(edge_src, edge_dst),
-                            idtype=torch.int32,
-                             num_nodes=mat.shape[0]
-                             )
-
+        mat = mat.tocoo().astype(np.float32)
+        ui_graph = self._scipy_to_torch_sparse(mat)
         return ui_graph
+
+    def _scipy_to_torch_sparse(self, mat):
+        mat = mat.tocoo()
+        indices = torch.from_numpy(
+            np.vstack((mat.row, mat.col)).astype(np.int64)
+        )
+        values = torch.from_numpy(mat.data.astype(np.float32))
+        shape = torch.Size(mat.shape)
+        return torch.sparse_coo_tensor(indices, values, shape).coalesce()
 
     # def normalizeAdj(self, mat):
     #     degree = np.array(mat.sum(axis=-1))
@@ -85,6 +99,7 @@ class DataHandler:
     #     dInvSqrt[np.isinf(dInvSqrt)] = 0.0
     #     dInvSqrtMat = sp.diags(dInvSqrt)
     #     return mat.dot(dInvSqrtMat).transpose().dot(dInvSqrtMat).tocoo()
+
 
 class TrnData(data.Dataset):
     def __init__(self, coomat):
@@ -108,6 +123,7 @@ class TrnData(data.Dataset):
     def __getitem__(self, idx):
         return self.rows[idx], self.cols[idx], self.negs[idx]
 
+
 class TstData(data.Dataset):
     def __init__(self, coomat, trnMat):
         self.csrmat = (trnMat.tocsr() != 0) * 1.0
@@ -130,6 +146,3 @@ class TstData(data.Dataset):
 
     def __getitem__(self, idx):
         return self.tstUsrs[idx], np.reshape(self.csrmat[self.tstUsrs[idx]].toarray(), [-1])
-
-
-
